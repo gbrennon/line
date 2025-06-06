@@ -1,4 +1,4 @@
-# line [![line build macOS](https://github.com/pd3v/line/actions/workflows/cmake.yml/badge.svg)](https://github.com/pd3v/line/actions/workflows/cmake.yml)</span>
+# line [![line build macOS](https://github.com/pd3v/line/actions/workflows/cmake.yml/badge.svg)](https://github.com/pd3v/line/actions/workflows/cmake.yml)[![Github All Releases](https://img.shields.io/github/downloads/pd3v/line/total.svg)]()</span>
 <span style ="font-size:12pt;font-weight:bold">A tiny command-line midi sequencer for live coding.</span> <span style ="font-size:10pt">(**ableton link** compatible version)</span> <span style ="font-size:11pt">
 
 + Sends MIDI messages to a chosen MIDI channel. Default is 1.
