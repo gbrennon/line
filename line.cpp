@@ -42,7 +42,7 @@ const float DEFAULT_BPM = 60.0;
 const uint64_t REF_BAR_DUR = 4000000; // microseconds
 const float REF_QUANTUM = 4; // 1 bar
 const char *PROMPT = "line>";
-const std::string VERSION = "0.7";
+const std::string VERSION = "0.7.1";
 const char REST_SYMBOL = '-';
 const uint8_t REST_VAL = 128;
 const uint64_t CTRL_RATE = 100000; // microseconds
@@ -64,8 +64,10 @@ struct LineCommand {std::string cmd;int repeats; bool isPhrase;};
 std::deque<LineCommand> quededCommands{};
 std::function<bool(std::string&)> execCommand;
 
-float latency = 0.0;
+long long latency = 8000;
 double toNextBar = 0;
+bool isSoundingThread = false, isPhraseTimeChanging;
+std::condition_variable cv;
 
 struct State {
   std::atomic<bool> running;
@@ -73,7 +75,7 @@ struct State {
   ableton::linkaudio::AudioPlatform audioPlatform;
 
   State(): running(true),link(DEFAULT_BPM),audioPlatform(link){}
-};
+} state;
 
 void disableBufferedInput() {
 #if defined(LINK_PLATFORM_UNIX)
@@ -302,7 +304,8 @@ struct MidiEvent {
   }
 };
 
-std::vector<MidiEvent>* midiEvents = new std::vector<MidiEvent>();
+std::unique_ptr<std::vector<MidiEvent>> midiEvents = std::make_unique<std::vector<MidiEvent>>();
+// std::vector<MidiEvent>* midiEvents = new std::vector<MidiEvent>();
 
 void displayCommandsList(std::string listVers="") {
   using namespace std;
@@ -662,8 +665,9 @@ void danglingMidiEvents(std::vector<uint8_t>& _message, RtMidiOut& _midiOut) {
 }
 */
 
-void timeStamping(phraseT _phrase) {  
-  std::vector<MidiEvent>* _midiEvents = new std::vector<MidiEvent>();
+void timeStamping(phraseT _phrase) {
+  std::unique_ptr<std::vector<MidiEvent>> _midiEvents = std::make_unique<std::vector<MidiEvent>>();
+  // std::vector<MidiEvent>* _midiEvents = new std::vector<MidiEvent>();
   std::vector<noteAmpT>_notes;
   float incr = 0;
   float _phase = 0;
@@ -684,7 +688,9 @@ void timeStamping(phraseT _phrase) {
   midiEvents = std::move(_midiEvents);
 }
 
-void FIFOingCommands(const float& _currentTime, double _executeTime, std::deque<LineCommand>& _queuedCmds, std::function<bool(std::string&)>& _execCommand) {
+void FIFOingCommands(const float& _currentTime, double _executeTime, std::deque<LineCommand>& _queuedCmds,
+std::function<bool(std::string&)>& _execCommand, bool& _isPhraseTimeChanging) {
+  /*
   std::atomic<bool> runThrough{false};
   const float TIME_OFFSET = 0.002;
 
@@ -701,7 +707,48 @@ void FIFOingCommands(const float& _currentTime, double _executeTime, std::deque<
   } else if (_currentTime < (_executeTime - TIME_OFFSET) || _currentTime > (_executeTime + TIME_OFFSET) && runThrough.load()) {
     runThrough.store(false);
   }
+  */
+  find_if(_queuedCmds.cbegin(), _queuedCmds.cend(), [&_isPhraseTimeChanging](auto& _cmd) {
+    _isPhraseTimeChanging = (_cmd.repeats == -1 || _cmd.repeats > 0);
+    return _isPhraseTimeChanging;
+  });
+
+  if (_isPhraseTimeChanging)
+    for (auto& _cmd : _queuedCmds) {
+      if (!_cmd.isPhrase && _cmd.repeats != 0) { 
+        _cmd.isPhrase = _execCommand(_cmd.cmd); 
+        if (_cmd.repeats != -1) _cmd.repeats--;
+      }
+    }
 };
+
+void nextPhraseComputing(std::unique_ptr<std::vector<MidiEvent>>& _midiEvents, std::vector<uint8_t>& _noteMessage, RtMidiOut& _midiOut) {
+  // printf("%s\n", __FUNCTION__);
+  const float TIME_OFFSET = 0.02;
+  std::atomic<bool> newCompute{true};
+  
+  while (isSoundingThread) {
+    const std::chrono::microseconds _time = state.link.clock().micros();
+    const ableton::Link::SessionState _sessionState = state.link.captureAppSessionState();
+    // const auto beats = sessionState.beatAtTime(time, quantum);
+    auto _phase = _sessionState.phaseAtTime(_time, quantum);
+
+    if (_phase >= (0.110000 - TIME_OFFSET) && _phase <= (0.110000 + TIME_OFFSET) && isPhraseTimeChanging && newCompute.load()) {
+      FIFOingCommands(_phase, quantum, quededCommands, execCommand, isPhraseTimeChanging);
+      // printf("%s\n", "computed");
+      newCompute.store(false);
+    } else if (_phase > (0.110000 + TIME_OFFSET) && _phase <= 0.110000 + TIME_OFFSET + TIME_OFFSET && !newCompute.load()) {
+        // printf("%s\n", "next compute");
+        newCompute.store(true);
+    }
+
+    // clearing dangling notes
+    if (_phase >= 3.999940 && _phase <= 3.999999)
+      for_each(_midiEvents->begin(), _midiEvents->end(), [&](MidiEvent& _midiEvent){_midiEvent.stop(_noteMessage, _midiOut);});
+
+    std::this_thread::sleep_for(std::chrono::microseconds(static_cast<long long>(8000)));
+  }  
+}
 
 int main(int argc, char **argv) {
   auto midiOut = RtMidiOut();
@@ -717,12 +764,16 @@ int main(int argc, char **argv) {
   std::string opt;
 
   std::mutex mtxWait, mtxPhrase;
+  /*
+  // Move to globals
   std::condition_variable cv;
 
   bool isSoundingThread = false;
+  
+  State state;
+  */
   bool exit = false;
 
-  State state;
   const auto tempo = state.link.captureAppSessionState().tempo();
   auto& engine = state.audioPlatform.mEngine;
   state.link.enable(!state.link.isEnabled());
@@ -734,7 +785,8 @@ int main(int argc, char **argv) {
 
   auto sequencer = async(std::launch::async, [&](){
     phraseT _phrase{};
-    std::vector<MidiEvent>* _midiEvents = new std::vector<MidiEvent>();
+    std::unique_ptr<std::vector<MidiEvent>> _midiEvents = std::make_unique<std::vector<MidiEvent>>();
+    // std::vector<MidiEvent>* _midiEvents = new std::vector<MidiEvent>();
 
     const bool linkEnabled = state.link.isEnabled();
     const std::size_t numPeers = state.link.numPeers();
@@ -751,6 +803,9 @@ int main(int argc, char **argv) {
 
     state.link.enable(true);
 
+    std::thread nextPhraseTh(nextPhraseComputing, std::ref(_midiEvents), std::ref(noteMessage), std::ref(midiOut));
+    nextPhraseTh.detach();
+
     while (isSoundingThread) {
       const std::chrono::microseconds time = state.link.clock().micros();
       const ableton::Link::SessionState sessionState = state.link.captureAppSessionState();
@@ -762,7 +817,7 @@ int main(int argc, char **argv) {
         if (phase >= toNextBar && midiEvents != nullptr)
           _midiEvents = std::move(midiEvents);
         
-        FIFOingCommands(phase, quantum, quededCommands, execCommand);
+        // FIFOingCommands(phase, quantum, quededCommands, execCommand);
         
         if (rNotes)
           for_each(_midiEvents->begin(), _midiEvents->end(), [&](MidiEvent& _midiEvent){_midiEvent.notesPlayStop(phase, noteMessage, midiOut);});
@@ -774,7 +829,7 @@ int main(int argc, char **argv) {
     }
     for_each(_midiEvents->begin(), _midiEvents->end(), [&](MidiEvent& _midiEvent){_midiEvent.stop(noteMessage, midiOut);});
 
-    delete _midiEvents;
+    // delete _midiEvents;
     _midiEvents = nullptr;
 
     return "line is off.\n";
@@ -1014,7 +1069,7 @@ int main(int argc, char **argv) {
           }
       } else if (_opt.substr(0,2) == "lt") {
           try {
-            latency = std::stof(_opt.substr(2,_opt.size()-1));
+            latency = std::stoll(_opt.substr(2,_opt.size()-1));
           } catch (...) {
             std::cerr << "Invalid latency." << std::endl;
           }
@@ -1039,7 +1094,7 @@ int main(int argc, char **argv) {
     quededCommands.clear();
     quededCommands = splitCommands(opt);
     
-    FIFOingCommands(quantum * 0.5000,quantum,quededCommands, execCommand);
+    FIFOingCommands(quantum * 0.5000,quantum,quededCommands, execCommand, isPhraseTimeChanging);
     
     add_history(opt.c_str());
   }
