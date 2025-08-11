@@ -1,4 +1,12 @@
 
+## 0.7.1
+
+. improve next cycle/bar midi events updating logic
+
+. checking potentially dangling midi events
+
+---
+
 ## 0.7
 
 . temporal phrase transforming by concatening character `_` after commands
