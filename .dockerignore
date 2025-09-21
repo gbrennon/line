@@ -1,0 +1,51 @@
+# Git files
+.git
+.gitignore
+.gitmodules
+
+# Documentation
+*.md
+*.png
+*.pdf
+
+# Build artifacts
+build/
+*.o
+*.so
+*.a
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Docker files
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Scripts
+run-line.sh
+
+# Saved phrases (will be mounted as volume)
+saved_phrases/
+
+# Temporary files
+*.tmp
+*.log
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Archives
+*.zip
+*.tar.gz
+*.tar.bz2
