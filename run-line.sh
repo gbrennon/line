@@ -102,7 +102,15 @@ run_alsa() {
     # Ensure saved_phrases directory exists
     mkdir -p saved_phrases
     
-    docker-compose up line
+    # Try docker compose (new) first, then docker-compose (old)
+    if command -v docker &> /dev/null && docker compose version &> /dev/null; then
+        docker compose up line
+    elif command -v docker-compose &> /dev/null; then
+        docker-compose up line
+    else
+        echo -e "${RED}Neither 'docker compose' nor 'docker-compose' found${NC}"
+        exit 1
+    fi
 }
 
 run_jack() {
@@ -120,7 +128,15 @@ run_jack() {
     # Ensure saved_phrases directory exists
     mkdir -p saved_phrases
     
-    docker-compose --profile jack up line-with-jack
+    # Try docker compose (new) first, then docker-compose (old)
+    if command -v docker &> /dev/null && docker compose version &> /dev/null; then
+        docker compose --profile jack up line-with-jack
+    elif command -v docker-compose &> /dev/null; then
+        docker-compose --profile jack up line-with-jack
+    else
+        echo -e "${RED}Neither 'docker compose' nor 'docker-compose' found${NC}"
+        exit 1
+    fi
 }
 
 clean_up() {
